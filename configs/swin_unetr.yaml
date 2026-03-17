@@ -1,0 +1,13 @@
+run_name: swin_unetr_petct_vascular
+
+model:
+  name: swin_unetr
+  in_channels: 2
+  out_channels: 5
+  feature_size: 48
+  use_checkpoint: true
+  spatial_dims: 3
+
+wandb:
+  project: Swin-UNETR-Vascular
+  run_name: Swin-UNETR

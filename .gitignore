@@ -1,0 +1,10 @@
+preprocessing_inspection/output/
+outputs/
+logs/
+
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.npz
+*.npy

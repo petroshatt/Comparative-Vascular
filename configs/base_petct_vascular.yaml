@@ -1,0 +1,48 @@
+seed: 123
+
+output_dir: /data/pchatzi/Comparative-Vascular/logs
+
+data:
+  images_dir: /data/pchatzi/nnUNet_data/nnUNet_raw/Dataset001_Vascular/imagesTr
+  labels_dir: /data/pchatzi/nnUNet_data/nnUNet_raw/Dataset001_Vascular/labelsTr
+  split_seed: 123
+  train_ratio: 0.7
+  val_ratio: 0.25
+  test_ratio: 0.05
+
+dataloader:
+  train_cache_rate: 1.0
+  val_cache_rate: 1.0
+  test_cache_rate: 1.0
+
+  train_num_workers: 2
+  val_num_workers: 1
+  test_num_workers: 1
+
+  train_loader_workers: 0
+  val_loader_workers: 0
+  test_loader_workers: 0
+
+  train_batch_size: 2
+  val_batch_size: 1
+  test_batch_size: 1
+
+  pin_memory: true
+
+transforms:
+  patch_size: [96, 96, 96]
+
+optimization:
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+
+training:
+  max_epochs: 1000
+  val_every: 20
+  sw_batch_size: 1
+  infer_overlap: 0.5
+
+wandb:
+  enabled: true
+  entity: null
+  mode: online

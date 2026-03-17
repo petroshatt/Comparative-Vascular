@@ -1,0 +1,19 @@
+run_name: unetr_petct_vascular
+
+model:
+  name: unetr
+  in_channels: 2
+  out_channels: 5
+  spatial_dims: 3
+  feature_size: 16
+  hidden_size: 768
+  mlp_dim: 3072
+  num_heads: 12
+  proj_type: conv
+  norm_name: instance
+  res_block: true
+  dropout_rate: 0.0
+
+wandb:
+  project: UNETR-Vascular
+  run_name: UNETR

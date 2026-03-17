@@ -1,0 +1,14 @@
+run_name: attention_unet_petct_vascular
+
+model:
+  name: attention_unet
+  in_channels: 2
+  out_channels: 5
+  spatial_dims: 3
+  channels: [16, 32, 64, 128, 256]
+  strides: [2, 2, 2, 2]
+  dropout: 0.0
+
+wandb:
+  project: Attention-UNet-Vascular
+  run_name: Attention-UNet

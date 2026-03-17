@@ -1,0 +1,16 @@
+run_name: segresnet_petct_vascular
+
+model:
+  name: segresnet
+  in_channels: 2
+  out_channels: 5
+  spatial_dims: 3
+  init_filters: 32
+  blocks_down: [1, 2, 2, 4]
+  blocks_up: [1, 1, 1]
+  dropout_prob: 0.0
+  upsample_mode: nontrainable
+
+wandb:
+  project: SegResNet-Vascular
+  run_name: SegResNet
