@@ -7,7 +7,12 @@ import random
 
 from monai.data import CacheDataset, DataLoader
 
-from .transforms import get_train_transforms, get_val_transforms
+from .transforms import (
+    get_train_transforms,
+    get_val_transforms,
+    get_train_transforms_nnunet_like,
+    get_val_transforms_nnunet_like,
+)
 
 
 def discover_cases(images_dir: str, labels_dir: str):
@@ -70,8 +75,14 @@ def build_datasets(config: dict):
         val_ratio=float(data_cfg.get("val_ratio", 0.1)),
     )
 
-    train_transform = get_train_transforms(config)
-    val_transform = get_val_transforms(config)
+    transform_mode = config.get("transforms", {}).get("mode", "default").lower()
+
+    if transform_mode == "nnunet_like":
+        train_transform = get_train_transforms_nnunet_like(config)
+        val_transform = get_val_transforms_nnunet_like(config)
+    else:
+        train_transform = get_train_transforms(config)
+        val_transform = get_val_transforms(config)
 
     train_ds = CacheDataset(
         data=train_files,

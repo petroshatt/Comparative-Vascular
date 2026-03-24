@@ -23,11 +23,11 @@ from typing import Any
 import torch
 import wandb
 
-from .data import build_dataloaders, save_split_manifest
-from .engine import run_training
-from .losses_and_metrics import build_loss, build_metric, build_post_transforms
-from .models import build_model
-from .utils import (
+from ..data import build_dataloaders, save_split_manifest
+from ..engine import run_training
+from ..losses_and_metrics import build_loss, build_metric, build_post_transforms
+from ..models import build_model
+from ..utils import (
     copy_file_to_dir,
     count_parameters,
     get_device,
@@ -51,6 +51,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train PET/CT segmentation model")
     parser.add_argument("--base_config", type=str, required=True, help="Path to base YAML config")
     parser.add_argument("--model_config", type=str, required=True, help="Path to model YAML config")
+    parser.add_argument(
+        "--curriculum_config",
+        type=str,
+        required=True,
+        help="Path to curriculum YAML config",
+    )
     return parser.parse_args()
 
 
@@ -109,7 +115,9 @@ def main():
 
     base_config = load_config(args.base_config)
     model_config = load_config(args.model_config)
+    curriculum_config = load_config(args.curriculum_config)
     config = merge_configs(base_config, model_config)
+    config = merge_configs(config, curriculum_config)
 
     required_top_keys = ["data", "dataloader", "transforms", "model", "optimization", "training"]
     for key in required_top_keys:
@@ -129,8 +137,14 @@ def main():
 
     copy_file_to_dir(args.base_config, artifacts_dir, "base_config.yaml")
     copy_file_to_dir(args.model_config, artifacts_dir, "model_config.yaml")
-    copy_file_to_dir(__file__, artifacts_dir, "train.py")
-    copy_file_to_dir("scripts/run_train.sh", artifacts_dir, "run_train.sh")
+    copy_file_to_dir(args.curriculum_config, artifacts_dir, "curriculum_config.yaml")
+    copy_file_to_dir(__file__, artifacts_dir, "train_curriculum_binary_to_aorta.py")
+
+    run_train_sh = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "run_train.sh")
+    )
+    if os.path.exists(run_train_sh):
+        copy_file_to_dir(run_train_sh, artifacts_dir, "run_train.sh")
 
     train_loader, val_loader, test_loader, train_files, val_files, test_files = build_dataloaders(config)
 

@@ -29,8 +29,20 @@ dataloader:
 
   pin_memory: true
 
-transforms:
-  patch_size: [96, 96, 96]
+transforms: 
+    mode: default
+    patch_size: [96, 96, 96]
+
+
+# transforms:
+#     mode: nnunet_like
+#     patch_size: [64, 320, 64]
+#     target_spacing: [4.062704563140869, 1.2000000476837158, 4.062704563140869]
+#     ct_mean: 38.624935150146484
+#     ct_std: 95.26876068115234
+#     ct_percentile_00_5: -430.6847839355469
+#     ct_percentile_99_5: 509.52093505859375
+
 
 optimization:
   learning_rate: 0.0001

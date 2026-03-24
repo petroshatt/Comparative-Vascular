@@ -18,6 +18,52 @@ def _nan_to_zero(x: float) -> float:
     return 0.0 if math.isnan(x) else x
 
 
+def _to_binary_indices(
+    labels: torch.Tensor,
+    foreground_region_channels: list[int] | None = None,
+) -> torch.Tensor:
+    if foreground_region_channels is None:
+        foreground_region_channels = [1, 2, 3, 4]
+
+    if labels.ndim < 2:
+        raise ValueError(f"Expected labels with shape [B, 1, ...] or [B, C, ...], got {tuple(labels.shape)}")
+
+    if labels.shape[1] == 1:
+        fg = torch.zeros_like(labels, dtype=torch.bool)
+        for c in foreground_region_channels:
+            fg |= (labels == c)
+        return fg.long()
+
+    fg = labels[:, foreground_region_channels].sum(dim=1, keepdim=True) > 0
+    return fg.long()
+
+
+def _pred5_to_pred2(
+    outputs: torch.Tensor,
+    background_channel: int = 0,
+    foreground_region_channels: list[int] | None = None,
+) -> torch.Tensor:
+    if foreground_region_channels is None:
+        foreground_region_channels = [1, 2, 3, 4]
+
+    bg = outputs[:, background_channel : background_channel + 1]
+    fg = outputs[:, foreground_region_channels].sum(dim=1, keepdim=True)
+    return torch.cat([bg, fg], dim=1)
+
+
+def _binary_dice_from_indices(pred_bin: torch.Tensor, tgt_bin: torch.Tensor) -> float:
+    pred_bin = pred_bin.float()
+    tgt_bin = tgt_bin.float()
+
+    inter = (pred_bin * tgt_bin).sum()
+    denom = pred_bin.sum() + tgt_bin.sum()
+
+    if float(denom.item()) == 0.0:
+        return 1.0
+
+    return float((2.0 * inter / denom).item())
+
+
 def run_training(
     model,
     train_loader,
@@ -42,10 +88,24 @@ def run_training(
     sw_batch_size = int(config["training"].get("sw_batch_size", 1))
     infer_overlap = float(config["training"].get("infer_overlap", 0.5))
 
+    curriculum_cfg = config["training"].get("curriculum", {})
+    curriculum_enabled = bool(curriculum_cfg.get("enabled", False))
+    curriculum_mode = curriculum_cfg.get("mode", "")
+    pretrain_epochs = int(curriculum_cfg.get("pretrain_epochs", 0))
+    background_channel = int(curriculum_cfg.get("background_channel", 0))
+    foreground_region_channels = list(curriculum_cfg.get("foreground_region_channels", [1, 2, 3, 4]))
+    binary_auxiliary_loss = bool(curriculum_cfg.get("binary_auxiliary_loss", False))
+    binary_auxiliary_weight_max = float(curriculum_cfg.get("binary_auxiliary_weight_max", 0.1))
+    binary_auxiliary_warmup_epochs = int(curriculum_cfg.get("binary_auxiliary_warmup_epochs", 50))
+
+    use_curriculum = curriculum_enabled and curriculum_mode == "binary_to_four_region_aorta"
+
     best_metric = -1.0
     best_metric_epoch = -1
 
     for epoch in range(1, max_epochs + 1):
+        stage_a = use_curriculum and (epoch <= pretrain_epochs)
+
         model.train()
         epoch_train_loss = 0.0
         train_steps = 0
@@ -56,7 +116,44 @@ def run_training(
 
             optimizer.zero_grad(set_to_none=True)
             outputs = model(images)
-            loss = loss_function(outputs, labels)
+
+            if stage_a:
+                train_targets = _to_binary_indices(
+                    labels,
+                    foreground_region_channels=foreground_region_channels,
+                )
+                train_outputs = _pred5_to_pred2(
+                    outputs,
+                    background_channel=background_channel,
+                    foreground_region_channels=foreground_region_channels,
+                )
+                loss = loss_function(train_outputs, train_targets)
+            else:
+                loss = loss_function(outputs, labels)
+
+                if use_curriculum and binary_auxiliary_loss:
+                    binary_targets = _to_binary_indices(
+                        labels,
+                        foreground_region_channels=foreground_region_channels,
+                    )
+                    binary_outputs = _pred5_to_pred2(
+                        outputs,
+                        background_channel=background_channel,
+                        foreground_region_channels=foreground_region_channels,
+                    )
+                    aux_loss = loss_function(binary_outputs, binary_targets)
+
+                    b_epoch = epoch - pretrain_epochs
+                    if binary_auxiliary_warmup_epochs > 0:
+                        aux_weight = min(
+                            binary_auxiliary_weight_max,
+                            binary_auxiliary_weight_max * (b_epoch / float(binary_auxiliary_warmup_epochs)),
+                        )
+                    else:
+                        aux_weight = binary_auxiliary_weight_max
+
+                    loss = loss + aux_weight * aux_loss
+
             loss.backward()
             optimizer.step()
 
@@ -73,12 +170,17 @@ def run_training(
             "train_loss": epoch_train_loss,
         }
 
+        if use_curriculum:
+            epoch_log["curriculum_stage_a_binary"] = int(stage_a)
+            print(f"curriculum_stage: {'binary' if stage_a else 'multi'}")
+
         if epoch % val_every == 0:
             model.eval()
             val_loss = 0.0
             val_steps = 0
 
             metric.reset()
+            binary_val_scores = []
 
             with torch.no_grad():
                 for batch in val_loader:
@@ -93,60 +195,86 @@ def run_training(
                         overlap=infer_overlap,
                     )
 
-                    loss = loss_function(outputs, labels)
-                    val_loss += float(loss.item())
-                    val_steps += 1
+                    if stage_a:
+                        val_targets = _to_binary_indices(
+                            labels,
+                            foreground_region_channels=foreground_region_channels,
+                        )
+                        val_outputs = _pred5_to_pred2(
+                            outputs,
+                            background_channel=background_channel,
+                            foreground_region_channels=foreground_region_channels,
+                        )
+                        loss = loss_function(val_outputs, val_targets)
+                        val_loss += float(loss.item())
+                        val_steps += 1
 
-                    outputs_list = [post_pred(o) for o in outputs]
-                    labels_list = [post_label(l) for l in labels]
-                    metric(y_pred=outputs_list, y=labels_list)
+                        pred_bin = torch.argmax(outputs, dim=1) > 0
+                        tgt_bin = val_targets.squeeze(1) > 0
+                        binary_val_scores.append(_binary_dice_from_indices(pred_bin, tgt_bin))
+                    else:
+                        loss = loss_function(outputs, labels)
+                        val_loss += float(loss.item())
+                        val_steps += 1
+
+                        outputs_list = [post_pred(o) for o in outputs]
+                        labels_list = [post_label(l) for l in labels]
+                        metric(y_pred=outputs_list, y=labels_list)
 
             val_loss /= max(val_steps, 1)
-
-            metric_values = metric.aggregate()
-            metric.reset()
-
-            if hasattr(metric_values, "detach"):
-                metric_values = metric_values.detach().cpu().float()
-
-            if metric_values.ndim == 0:
-                class_scores = [float(metric_values.item())]
-            else:
-                class_scores = [float(x) for x in metric_values.flatten()]
-
-            dice_mean = _nanmean(class_scores)
-
             epoch_log["val_loss"] = val_loss
-            epoch_log[mean_metric_name] = dice_mean
-
             print(f"val_loss: {val_loss:.6f}")
-            print(f"{mean_metric_name}: {dice_mean:.6f}")
 
-            if region_metric_names is not None:
-                for label_idx, metric_name in region_metric_names.items():
-                    score_index = label_idx - 1
-                    raw_score = class_scores[score_index] if score_index < len(class_scores) else float("nan")
-                    logged_score = _nan_to_zero(raw_score)
-                    epoch_log[metric_name] = logged_score
-                    print(f"{metric_name}: {logged_score:.6f}")
+            if stage_a:
+                dice_mean = _nanmean(binary_val_scores)
+                epoch_log[mean_metric_name] = dice_mean
+                epoch_log["dice_binary_aorta"] = dice_mean
 
-            if dice_mean > best_metric:
-                best_metric = dice_mean
-                best_metric_epoch = epoch
+                print(f"dice_binary_aorta: {dice_mean:.6f}")
+                print(f"{mean_metric_name}: {dice_mean:.6f}")
+            else:
+                metric_values = metric.aggregate()
+                metric.reset()
 
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "best_metric": best_metric,
-                        "config": config,
-                    },
-                    os.path.join(models_dir, "best_model.pt"),
-                )
+                if hasattr(metric_values, "detach"):
+                    metric_values = metric_values.detach().cpu().float()
 
-            epoch_log[best_mean_metric_name] = best_metric
-            print(f"{best_mean_metric_name}: {best_metric:.6f}")
+                if metric_values.ndim == 0:
+                    class_scores = [float(metric_values.item())]
+                else:
+                    class_scores = [float(x) for x in metric_values.flatten()]
+
+                dice_mean = _nanmean(class_scores)
+
+                epoch_log[mean_metric_name] = dice_mean
+
+                print(f"{mean_metric_name}: {dice_mean:.6f}")
+
+                if region_metric_names is not None:
+                    for label_idx, metric_name in region_metric_names.items():
+                        score_index = label_idx - 1
+                        raw_score = class_scores[score_index] if score_index < len(class_scores) else float("nan")
+                        logged_score = _nan_to_zero(raw_score)
+                        epoch_log[metric_name] = logged_score
+                        print(f"{metric_name}: {logged_score:.6f}")
+
+                if dice_mean > best_metric:
+                    best_metric = dice_mean
+                    best_metric_epoch = epoch
+
+                    torch.save(
+                        {
+                            "epoch": epoch,
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "best_metric": best_metric,
+                            "config": config,
+                        },
+                        os.path.join(models_dir, "best_model.pt"),
+                    )
+
+            epoch_log[best_mean_metric_name] = best_metric if best_metric >= 0.0 else 0.0
+            print(f"{best_mean_metric_name}: {epoch_log[best_mean_metric_name]:.6f}")
             print(f"best_metric_epoch: {best_metric_epoch}")
 
             torch.save(

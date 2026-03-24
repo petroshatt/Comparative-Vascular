@@ -3,7 +3,7 @@
 # Example:
 # nohup bash scripts/run_train.sh configs/swin_unetr.yaml > swin.out 2>&1 &
 
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=2
 
 if [ "$#" -ne 1 ]; then
   echo "Usage: bash scripts/run_train.sh <model_config>"

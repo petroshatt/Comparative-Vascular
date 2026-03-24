@@ -1,0 +1,14 @@
+training:
+  curriculum:
+    enabled: true
+    mode: binary_to_four_region_aorta
+    pretrain_epochs: 180
+    background_channel: 0
+    foreground_region_channels:
+      - 1
+      - 2
+      - 3
+      - 4
+    binary_auxiliary_loss: true
+    binary_auxiliary_weight_max: 0.1
+    binary_auxiliary_warmup_epochs: 50
