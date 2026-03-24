@@ -1,4 +1,4 @@
-# PET/CT 3D Vascular Segmentation Benchmark (MONAI)
+# PET/CT 3D Vascular Segmentation Benchmark
 
 This repository implements a **comparative framework for 3D PET/CT
 vascular segmentation** using MONAI.
@@ -14,7 +14,6 @@ Currently supported architectures include:
 -   UNet
 -   Attention UNet
 -   SegResNet
--   VNet
 
 Additional architectures can easily be added through the `models.py`
 factory.
