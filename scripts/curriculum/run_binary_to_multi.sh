@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Example:
-# nohup bash scripts/curriculum/run_binary_to_multi.sh configs/swin_unetr.yaml configs/curriculum/binary_to_multi.yaml > swin_binary_to_multi.out 2>&1 &
+# nohup bash scripts/curriculum/run_binary_to_multi.sh configs/swin_unetr.yaml configs/curriculum/binary_to_multi.yaml > out/swin_binary_to_multi.out 2>&1 &
 
 export CUDA_VISIBLE_DEVICES=2
 

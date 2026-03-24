@@ -1,0 +1,11 @@
+training:
+  curriculum:
+    enabled: true
+    mode: progressive_patch_size
+    stages:
+      - end_epoch: 180
+        patch_size: [64, 64, 64]
+      - end_epoch: 360
+        patch_size: [96, 96, 96]
+      - end_epoch: 540
+        patch_size: [128, 128, 128]

@@ -6,6 +6,8 @@ import os
 import torch
 from monai.inferers import sliding_window_inference
 
+from .data import rebuild_dataloaders_for_patch_size
+
 
 def _nanmean(values: list[float]) -> float:
     valid = [v for v in values if not math.isnan(v)]
@@ -64,6 +66,48 @@ def _binary_dice_from_indices(pred_bin: torch.Tensor, tgt_bin: torch.Tensor) -> 
     return float((2.0 * inter / denom).item())
 
 
+def _get_progressive_patch_size(
+    epoch: int,
+    curriculum_cfg: dict,
+    default_patch_size: tuple[int, ...],
+) -> tuple[int, ...]:
+    if not bool(curriculum_cfg.get("enabled", False)):
+        return default_patch_size
+
+    if curriculum_cfg.get("mode", "") != "progressive_patch_size":
+        return default_patch_size
+
+    stages = curriculum_cfg.get("stages", [])
+    if len(stages) == 0:
+        return default_patch_size
+
+    for stage in stages:
+        end_epoch = int(stage["end_epoch"])
+        stage_patch_size = tuple(int(x) for x in stage["patch_size"])
+        if epoch <= end_epoch:
+            return stage_patch_size
+
+    return tuple(int(x) for x in stages[-1]["patch_size"])
+
+
+def _get_progressive_stage_index(epoch: int, curriculum_cfg: dict) -> int:
+    if not bool(curriculum_cfg.get("enabled", False)):
+        return 0
+
+    if curriculum_cfg.get("mode", "") != "progressive_patch_size":
+        return 0
+
+    stages = curriculum_cfg.get("stages", [])
+    if len(stages) == 0:
+        return 0
+
+    for i, stage in enumerate(stages):
+        if epoch <= int(stage["end_epoch"]):
+            return i + 1
+
+    return len(stages)
+
+
 def run_training(
     model,
     train_loader,
@@ -84,13 +128,14 @@ def run_training(
 ):
     max_epochs = int(config["training"]["max_epochs"])
     val_every = int(config["training"].get("val_every", 1))
-    patch_size = tuple(config["transforms"]["patch_size"])
+    default_patch_size = tuple(config["transforms"]["patch_size"])
     sw_batch_size = int(config["training"].get("sw_batch_size", 1))
     infer_overlap = float(config["training"].get("infer_overlap", 0.5))
 
     curriculum_cfg = config["training"].get("curriculum", {})
     curriculum_enabled = bool(curriculum_cfg.get("enabled", False))
     curriculum_mode = curriculum_cfg.get("mode", "")
+
     pretrain_epochs = int(curriculum_cfg.get("pretrain_epochs", 0))
     background_channel = int(curriculum_cfg.get("background_channel", 0))
     foreground_region_channels = list(curriculum_cfg.get("foreground_region_channels", [1, 2, 3, 4]))
@@ -98,13 +143,40 @@ def run_training(
     binary_auxiliary_weight_max = float(curriculum_cfg.get("binary_auxiliary_weight_max", 0.1))
     binary_auxiliary_warmup_epochs = int(curriculum_cfg.get("binary_auxiliary_warmup_epochs", 50))
 
-    use_curriculum = curriculum_enabled and curriculum_mode == "binary_to_four_region_aorta"
+    use_binary_curriculum = curriculum_enabled and curriculum_mode == "binary_to_four_region_aorta"
+    use_progressive_patch_curriculum = curriculum_enabled and curriculum_mode == "progressive_patch_size"
 
     best_metric = -1.0
     best_metric_epoch = -1
 
+    current_train_patch_size = None
+    current_progressive_stage_index = None
+
     for epoch in range(1, max_epochs + 1):
-        stage_a = use_curriculum and (epoch <= pretrain_epochs)
+        stage_a = use_binary_curriculum and (epoch <= pretrain_epochs)
+
+        patch_size = _get_progressive_patch_size(
+            epoch=epoch,
+            curriculum_cfg=curriculum_cfg,
+            default_patch_size=default_patch_size,
+        )
+        progressive_stage_index = _get_progressive_stage_index(epoch, curriculum_cfg)
+
+        if use_progressive_patch_curriculum:
+            should_rebuild_loaders = (
+                current_train_patch_size is None
+                or tuple(current_train_patch_size) != tuple(patch_size)
+            )
+
+            if should_rebuild_loaders:
+                print(f"Rebuilding dataloaders for patch size: {patch_size}")
+
+                train_loader, val_loader, _, _, _, _ = rebuild_dataloaders_for_patch_size(
+                    config=config,
+                    patch_size=patch_size,
+                )
+                current_train_patch_size = tuple(patch_size)
+                current_progressive_stage_index = progressive_stage_index
 
         model.train()
         epoch_train_loss = 0.0
@@ -131,7 +203,7 @@ def run_training(
             else:
                 loss = loss_function(outputs, labels)
 
-                if use_curriculum and binary_auxiliary_loss:
+                if use_binary_curriculum and binary_auxiliary_loss:
                     binary_targets = _to_binary_indices(
                         labels,
                         foreground_region_channels=foreground_region_channels,
@@ -170,9 +242,17 @@ def run_training(
             "train_loss": epoch_train_loss,
         }
 
-        if use_curriculum:
+        if use_binary_curriculum:
             epoch_log["curriculum_stage_a_binary"] = int(stage_a)
             print(f"curriculum_stage: {'binary' if stage_a else 'multi'}")
+
+        if use_progressive_patch_curriculum:
+            epoch_log["curriculum_patch_stage"] = progressive_stage_index
+            epoch_log["curriculum_patch_x"] = int(patch_size[0])
+            epoch_log["curriculum_patch_y"] = int(patch_size[1])
+            epoch_log["curriculum_patch_z"] = int(patch_size[2])
+            print(f"curriculum_stage: patch_stage_{progressive_stage_index}")
+            print(f"curriculum_patch_size: {patch_size}")
 
         if epoch % val_every == 0:
             model.eval()
@@ -247,7 +327,6 @@ def run_training(
                 dice_mean = _nanmean(class_scores)
 
                 epoch_log[mean_metric_name] = dice_mean
-
                 print(f"{mean_metric_name}: {dice_mean:.6f}")
 
                 if region_metric_names is not None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import glob
 import json
 import os
@@ -59,9 +60,24 @@ def split_cases(data_dicts: list[dict], split_seed: int, train_ratio: float, val
     return train_files, val_files, test_files
 
 
-def build_datasets(config: dict):
-    data_cfg = config["data"]
-    loader_cfg = config.get("dataloader", {})
+def _with_patch_size_override(config: dict, patch_size_override: tuple[int, ...] | list[int] | None) -> dict:
+    if patch_size_override is None:
+        return config
+
+    cfg = copy.deepcopy(config)
+    cfg.setdefault("transforms", {})
+    cfg["transforms"]["patch_size"] = [int(x) for x in patch_size_override]
+    return cfg
+
+
+def build_datasets(
+    config: dict,
+    patch_size_override: tuple[int, ...] | list[int] | None = None,
+):
+    cfg = _with_patch_size_override(config, patch_size_override)
+
+    data_cfg = cfg["data"]
+    loader_cfg = cfg.get("dataloader", {})
 
     data_dicts = discover_cases(
         images_dir=data_cfg["images_dir"],
@@ -75,14 +91,14 @@ def build_datasets(config: dict):
         val_ratio=float(data_cfg.get("val_ratio", 0.1)),
     )
 
-    transform_mode = config.get("transforms", {}).get("mode", "default").lower()
+    transform_mode = cfg.get("transforms", {}).get("mode", "default").lower()
 
     if transform_mode == "nnunet_like":
-        train_transform = get_train_transforms_nnunet_like(config)
-        val_transform = get_val_transforms_nnunet_like(config)
+        train_transform = get_train_transforms_nnunet_like(cfg)
+        val_transform = get_val_transforms_nnunet_like(cfg)
     else:
-        train_transform = get_train_transforms(config)
-        val_transform = get_val_transforms(config)
+        train_transform = get_train_transforms(cfg)
+        val_transform = get_val_transforms(cfg)
 
     train_ds = CacheDataset(
         data=train_files,
@@ -106,10 +122,16 @@ def build_datasets(config: dict):
     return train_ds, val_ds, test_ds, train_files, val_files, test_files
 
 
-def build_dataloaders(config: dict):
+def build_dataloaders(
+    config: dict,
+    patch_size_override: tuple[int, ...] | list[int] | None = None,
+):
     loader_cfg = config.get("dataloader", {})
 
-    train_ds, val_ds, test_ds, train_files, val_files, test_files = build_datasets(config)
+    train_ds, val_ds, test_ds, train_files, val_files, test_files = build_datasets(
+        config=config,
+        patch_size_override=patch_size_override,
+    )
 
     train_loader = DataLoader(
         train_ds,
@@ -136,6 +158,13 @@ def build_dataloaders(config: dict):
     )
 
     return train_loader, val_loader, test_loader, train_files, val_files, test_files
+
+
+def rebuild_dataloaders_for_patch_size(
+    config: dict,
+    patch_size: tuple[int, ...] | list[int],
+):
+    return build_dataloaders(config=config, patch_size_override=patch_size)
 
 
 def save_split_manifest(run_dir: str, train_files: list[dict], val_files: list[dict], test_files: list[dict]):

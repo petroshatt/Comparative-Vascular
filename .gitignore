@@ -1,6 +1,7 @@
 preprocessing_inspection/output/
 outputs/
 logs/
+out/
 
 *.ckpt
 *.pt
@@ -8,3 +9,4 @@ logs/
 *.h5
 *.npz
 *.npy
+*.pyc
