@@ -2,6 +2,7 @@ preprocessing_inspection/output/
 outputs/
 logs/
 out/
+src/__pycache__
 
 *.ckpt
 *.pt
